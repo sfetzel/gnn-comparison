@@ -19,7 +19,7 @@ model:
 device:
   - cpu
 batch_size:
-  - 32
+#  - 32
   - 128
 learning_rate:
   - 0.01
@@ -32,6 +32,9 @@ hidden_units:  # Note: GIN add a first layer that simply adds up all node featur
   - [32, 32]
 optimizer:
   - Adam
+preconditioner:
+  - K-FAC
+  - None
 scheduler:
   -
     class: StepLR

@@ -18,6 +18,7 @@ import time
 from datetime import timedelta
 
 import torch
+from torch_kfac import KFAC
 
 
 def format_time(avg_time):
@@ -36,25 +37,35 @@ class NetWrapper:
         self.device = torch.device(device)
         self.classification = classification
 
-    def _train(self, train_loader, optimizer, clipping=None):
+    def _train(self, train_loader, optimizer, epoch, clipping=None, preconditioner=None):
         model = self.model.to(self.device)
 
         model.train()
 
         loss_all = 0
         acc_all = 0
+        update_cov = (epoch-1) % 50 == 0
         for data in train_loader:
 
             data = data.to(self.device)
             optimizer.zero_grad()
-            output = model(data)
+            if isinstance(preconditioner, KFAC) and update_cov:
+                with preconditioner.track_forward():
+                    output = model(data)
+            else:
+                output = model(data)
+
 
             if not isinstance(output, tuple):
                 output = (output,)
 
             if self.classification:
                 loss, acc = self.loss_fun(data.y, *output)
-                loss.backward()
+                if isinstance(preconditioner, KFAC) and update_cov:
+                    with preconditioner.track_backward():
+                        loss.backward()
+                else:
+                    loss.backward()
 
                 try:
                     num_graphs = data.num_graphs
@@ -65,11 +76,20 @@ class NetWrapper:
                 acc_all += acc.item() * num_graphs
             else:
                 loss = self.loss_fun(data.y, *output)
-                loss.backward()
+                if isinstance(preconditioner, KFAC):
+                    with preconditioner.track_backward():
+                        loss.backward()
+                else:
+                    loss.backward()
                 loss_all += loss.item()
 
             if clipping is not None:  # Clip gradient before updating weights
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clipping)
+
+            if isinstance(preconditioner, KFAC):
+                if update_cov:
+                    preconditioner.update_cov()
+                preconditioner.step(loss)
             optimizer.step()
 
         if self.classification:
@@ -110,7 +130,8 @@ class NetWrapper:
             return None, loss_all / len(loader.dataset)
 
     def train(self, train_loader, max_epochs=100, optimizer=torch.optim.Adam, scheduler=None, clipping=None,
-              validation_loader=None, test_loader=None, early_stopping=None, logger=None, log_every=10):
+              validation_loader=None, test_loader=None, early_stopping=None, logger=None, log_every=10,
+              preconditioner=None):
 
         early_stopper = early_stopping() if early_stopping is not None else None
 
@@ -122,7 +143,7 @@ class NetWrapper:
         for epoch in range(1, max_epochs+1):
 
             start = time.time()
-            train_acc, train_loss = self._train(train_loader, optimizer, clipping)
+            train_acc, train_loss = self._train(train_loader, optimizer, epoch, clipping, preconditioner)
             end = time.time() - start
             time_per_epoch.append(end)
 

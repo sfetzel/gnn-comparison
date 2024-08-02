@@ -14,6 +14,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+from torch_kfac import KFAC
+from torch_kfac.layers import Identity
+
 from experiments.Experiment import Experiment
 from models.gnn_wrapper.NetWrapper import NetWrapper
 
@@ -41,6 +44,7 @@ class EndToEndExperiment(Experiment):
         model_class = self.model_config.model
         loss_class = self.model_config.loss
         optim_class = self.model_config.optimizer
+        preconditioner_class = self.model_config.preconditioner
         sched_class = self.model_config.scheduler
         stopper_class = self.model_config.early_stopper
         clipping = self.model_config.gradient_clipping
@@ -55,7 +59,12 @@ class EndToEndExperiment(Experiment):
 
         optimizer = optim_class(model.parameters(),
                                 lr=self.model_config['learning_rate'], weight_decay=self.model_config['l2'])
-
+        preconditioner = None
+        if preconditioner_class == "K-FAC":
+            preconditioner = KFAC(model, 0.0, 0.1, adapt_damping=True,
+                                  update_cov_manually=True)
+            preconditioner_blocks = sum(1 for block in preconditioner.blocks if not isinstance(block, Identity))
+            print(f"Preconditioning active for {preconditioner_blocks} blocks")
         if sched_class is not None:
             scheduler = sched_class(optimizer)
         else:
@@ -67,7 +76,8 @@ class EndToEndExperiment(Experiment):
                                                                    clipping=clipping,
                                                                    validation_loader=val_loader,
                                                                    early_stopping=stopper_class,
-                                                                   logger=logger)
+                                                                   logger=logger,
+                                                                   preconditioner=preconditioner)
         return train_acc, val_acc
 
     def run_test(self, dataset_getter, logger, other=None):
@@ -91,6 +101,7 @@ class EndToEndExperiment(Experiment):
         sched_class = self.model_config.scheduler
         stopper_class = self.model_config.early_stopper
         clipping = self.model_config.gradient_clipping
+        preconditioner_class = self.model_config.preconditioner
 
         train_loader, val_loader = dataset_getter.get_train_val(dataset, self.model_config['batch_size'],
                                                                 shuffle=shuffle)
@@ -102,7 +113,12 @@ class EndToEndExperiment(Experiment):
 
         optimizer = optim_class(model.parameters(),
                                 lr=self.model_config['learning_rate'], weight_decay=self.model_config['l2'])
-
+        preconditioner = None
+        if preconditioner_class == "K-FAC":
+            preconditioner = KFAC(model, 0.0, 0.1, adapt_damping=True,
+                                  update_cov_manually=True)
+            preconditioner_blocks = sum(1 for block in preconditioner.blocks if not isinstance(block, Identity))
+            print(f"Preconditioning active for {preconditioner_blocks} blocks")
         if sched_class is not None:
             scheduler = sched_class(optimizer)
         else:
@@ -112,6 +128,6 @@ class EndToEndExperiment(Experiment):
             net.train(train_loader=train_loader, max_epochs=self.model_config['classifier_epochs'],
                       optimizer=optimizer, scheduler=scheduler, clipping=clipping,
                       validation_loader=val_loader, test_loader=test_loader, early_stopping=stopper_class,
-                      logger=logger)
+                      logger=logger, preconditioner=preconditioner)
 
         return train_acc, test_acc
